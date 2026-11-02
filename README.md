@@ -5,11 +5,16 @@ Instead of a "+1 minute" button, you type the number of minutes in binary:
 UP enters a `1`, DOWN enters a `0`. For example, 1, 0, 1, 0 is 10 minutes.
 
 **[▶ Try it in your browser](https://developer.repebble.com/pebbleos/docs/playground/?pbw=https://raw.githubusercontent.com/ebensh/pebble-timer-binary/main/demo/pebble-timer-binary.pbw)**
-(runs the real app in the PebbleOS Playground; pick Pebble Time 2 if asked).
+(runs the real app in the PebbleOS Playground).
 
 | Entering 1010 | Running | Paused | Done |
 |---|---|---|---|
 | ![](screenshots/entry_1010.png) | ![](screenshots/running.png) | ![](screenshots/paused.png) | ![](screenshots/done.png) |
+
+Runs on every Pebble: Classic, Time, Time Round, Pebble 2, Pebble 2 Duo,
+Time 2 and Round 2 (aplite, basalt, chalk, diorite, flint, emery, gabbro).
+
+![All platforms](screenshots/all_platforms.png)
 
 ## Controls
 
@@ -29,7 +34,7 @@ Requires the [Pebble SDK](https://developer.repebble.com/sdk).
 
 ```bash
 pebble build
-pebble install --emulator emery     # or: pebble install --phone <ip>
+pebble install --emulator emery     # or any platform above; or: pebble install --phone <ip>
 ```
 
 `demo/pebble-timer-binary.pbw` is a prebuilt copy used by the browser demo;
