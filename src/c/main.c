@@ -126,76 +126,143 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
 }
 
 // ---------------------------------------------------------------- drawing
+//
+// Layout is proportional to the screen so the same code fits every Pebble:
+// 144x168 (aplite, basalt, diorite, flint), 200x228 (emery), and the round
+// 180x180 (chalk) and 260x260 (gabbro).
 
-static void draw_centered(GContext *ctx, const char *text, const char *font_key,
-                          int x, int y, int w, int h) {
-  graphics_draw_text(ctx, text, fonts_get_system_font(font_key),
-                     GRect(x, y, w, h), GTextOverflowModeWordWrap,
+// Colors, with fallbacks for black-and-white watches.
+#define COLOR_MUTED     COLOR_FALLBACK(GColorLightGray, GColorWhite)
+#define COLOR_DISABLED  COLOR_FALLBACK(GColorDarkGray, GColorWhite)
+#define COLOR_VALUE     COLOR_FALLBACK(GColorPictonBlue, GColorWhite)
+#define COLOR_BAR_BG    COLOR_FALLBACK(GColorDarkGray, GColorWhite)
+#define COLOR_ICON      PBL_IF_ROUND_ELSE(GColorWhite, COLOR_FALLBACK(GColorWhite, GColorBlack))
+#define COLOR_TRACK     COLOR_FALLBACK(GColorDarkGray, GColorBlack)
+
+static const char *const BITS_FONTS[] = {
+  FONT_KEY_LECO_36_BOLD_NUMBERS, FONT_KEY_LECO_28_LIGHT_NUMBERS,
+  FONT_KEY_LECO_20_BOLD_NUMBERS, FONT_KEY_GOTHIC_18_BOLD,
+};
+static const char *const CLOCK_FONTS[] = {
+  FONT_KEY_LECO_42_NUMBERS, FONT_KEY_LECO_36_BOLD_NUMBERS, FONT_KEY_LECO_28_LIGHT_NUMBERS,
+  FONT_KEY_LECO_20_BOLD_NUMBERS,
+};
+static const char *const LARGE_FONTS[] = {
+  FONT_KEY_GOTHIC_28_BOLD, FONT_KEY_GOTHIC_24_BOLD, FONT_KEY_GOTHIC_18_BOLD,
+};
+static const char *const LABEL_FONTS[] = {
+  FONT_KEY_GOTHIC_24_BOLD, FONT_KEY_GOTHIC_18_BOLD,
+};
+static const char *const SMALL_FONTS[] = {
+  FONT_KEY_GOTHIC_18, FONT_KEY_GOTHIC_14,
+};
+
+// Draws text centered horizontally in [x, x + w) and vertically on y_center,
+// in the first of `keys` that fits the width.
+static void draw_fitted(GContext *ctx, const char *text, const char *const *keys, int n,
+                        int x, int w, int y_center) {
+  GFont font = NULL;
+  GSize size = GSizeZero;
+  for (int i = 0; i < n; i++) {
+    font = fonts_get_system_font(keys[i]);
+    size = graphics_text_layout_get_content_size(text, font, GRect(0, 0, 1000, 1000),
+                                                 GTextOverflowModeWordWrap,
+                                                 GTextAlignmentCenter);
+    if (size.w <= w) break;
+  }
+  graphics_draw_text(ctx, text, font, GRect(x, y_center - size.h / 2 - 4, w, size.h + 8),
+                     GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
+}
+
+#define DRAW_FITTED(ctx, text, fonts, x, w, y) \
+  draw_fitted(ctx, text, fonts, ARRAY_LENGTH(fonts), x, w, y)
+
+static void draw_label(GContext *ctx, const char *text, GPoint center) {
+  graphics_draw_text(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD),
+                     GRect(center.x - 15, center.y - 20, 30, 34), GTextOverflowModeWordWrap,
                      GTextAlignmentCenter, NULL);
 }
 
-static void draw_action_bar(GContext *ctx, GRect bar) {
-  graphics_context_set_fill_color(ctx, GColorDarkGray);
-  graphics_fill_rect(ctx, bar, 0, GCornerNone);
-  graphics_context_set_text_color(ctx, GColorWhite);
-  graphics_context_set_fill_color(ctx, GColorWhite);
+static void draw_play(GContext *ctx, GPoint center) {
+  gpath_move_to(s_play_path, center);
+  gpath_draw_filled(ctx, s_play_path);
+}
 
-  const int cx = bar.origin.x + bar.size.w / 2;
-  const int up_y = 30, mid_y = bar.size.h / 2, down_y = bar.size.h - 30;
+// Button hints next to UP, SELECT and DOWN: a strip on rectangular watches,
+// free-floating labels just inside the edge on round ones.
+static void draw_button_hints(GContext *ctx, GRect bounds) {
+  const int w = bounds.size.w, h = bounds.size.h;
+#if defined(PBL_ROUND)
+  const int r = w / 2;
+  const GPoint up = GPoint(w / 2 + r * 60 / 100, h / 2 - r * 50 / 100);
+  const GPoint select = GPoint(w / 2 + r * 80 / 100, h / 2);
+  const GPoint down = GPoint(up.x, h - up.y);
+#else
+  graphics_context_set_fill_color(ctx, COLOR_BAR_BG);
+  graphics_fill_rect(ctx, GRect(w - ACTION_BAR_WIDTH, 0, ACTION_BAR_WIDTH, h), 0, GCornerNone);
+  const int cx = w - ACTION_BAR_WIDTH / 2;
+  const GPoint up = GPoint(cx, h * 13 / 100);
+  const GPoint select = GPoint(cx, h / 2);
+  const GPoint down = GPoint(cx, h - up.y);
+#endif
+  graphics_context_set_text_color(ctx, COLOR_ICON);
+  graphics_context_set_fill_color(ctx, COLOR_ICON);
 
   switch (s_state) {
     case STATE_ENTRY:
-      draw_centered(ctx, "1", FONT_KEY_GOTHIC_28_BOLD, bar.origin.x, up_y - 19, bar.size.w, 34);
-      draw_centered(ctx, "0", FONT_KEY_GOTHIC_28_BOLD, bar.origin.x, down_y - 19, bar.size.w, 34);
-      if (s_num_bits > 0 && bits_value() > 0) {
-        gpath_move_to(s_play_path, GPoint(cx, mid_y));
-        gpath_draw_filled(ctx, s_play_path);
-      }
+      draw_label(ctx, "1", up);
+      draw_label(ctx, "0", down);
+      if (bits_value() > 0) draw_play(ctx, select);
       break;
     case STATE_RUNNING:
-      graphics_fill_rect(ctx, GRect(cx - 7, mid_y - 9, 5, 18), 0, GCornerNone);
-      graphics_fill_rect(ctx, GRect(cx + 2, mid_y - 9, 5, 18), 0, GCornerNone);
+      graphics_fill_rect(ctx, GRect(select.x - 7, select.y - 9, 5, 18), 0, GCornerNone);
+      graphics_fill_rect(ctx, GRect(select.x + 2, select.y - 9, 5, 18), 0, GCornerNone);
       break;
     case STATE_PAUSED:
-      gpath_move_to(s_play_path, GPoint(cx, mid_y));
-      gpath_draw_filled(ctx, s_play_path);
+      draw_play(ctx, select);
       break;
     case STATE_DONE:
-      draw_centered(ctx, "OK", FONT_KEY_GOTHIC_18_BOLD, bar.origin.x, mid_y - 12, bar.size.w, 24);
+      graphics_draw_text(ctx, "OK", fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+                         GRect(select.x - 15, select.y - 12, 30, 24), GTextOverflowModeWordWrap,
+                         GTextAlignmentCenter, NULL);
       break;
   }
 }
 
-static void draw_entry(GContext *ctx, int w, int h) {
-  graphics_context_set_text_color(ctx, GColorLightGray);
-  draw_centered(ctx, "BINARY TIMER", FONT_KEY_GOTHIC_18_BOLD, 0, 6, w, 22);
+static void draw_entry(GContext *ctx, int x, int w, int h, int screen_w) {
+  graphics_context_set_text_color(ctx, COLOR_MUTED);
+#if defined(PBL_ROUND)
+  // Full width and above the "1" hint, which sits at the column's top right.
+  graphics_draw_text(ctx, "BINARY TIMER", fonts_get_system_font(FONT_KEY_GOTHIC_14),
+                     GRect(0, h * 10 / 100, screen_w, 18), GTextOverflowModeWordWrap,
+                     GTextAlignmentCenter, NULL);
+#else
+  DRAW_FITTED(ctx, "BINARY TIMER", SMALL_FONTS, x, w, h * 7 / 100);
+#endif
 
-  // Bits, in the largest number font that fits.
-  graphics_context_set_text_color(ctx, GColorWhite);
   if (s_num_bits == 0) {
-    graphics_context_set_text_color(ctx, GColorDarkGray);
-    draw_centered(ctx, "_", FONT_KEY_LECO_42_NUMBERS, 0, 54, w, 50);
+    graphics_context_set_text_color(ctx, COLOR_DISABLED);
+    DRAW_FITTED(ctx, "_", BITS_FONTS, x, w, h * 36 / 100);
   } else {
-    const char *font_key = s_num_bits <= 6 ? FONT_KEY_LECO_36_BOLD_NUMBERS
-                                           : FONT_KEY_LECO_20_BOLD_NUMBERS;
-    const int y = s_num_bits <= 6 ? 58 : 70;
-    draw_centered(ctx, s_bits, font_key, 0, y, w, 50);
+    graphics_context_set_text_color(ctx, GColorWhite);
+    DRAW_FITTED(ctx, s_bits, BITS_FONTS, x, w, h * 36 / 100);
   }
 
-  // Decimal equivalent.
   static char value_buf[16];
   int minutes = bits_value();
   snprintf(value_buf, sizeof(value_buf), "= %d min", minutes);
-  graphics_context_set_text_color(ctx, minutes > 0 ? GColorPictonBlue : GColorDarkGray);
-  draw_centered(ctx, value_buf, FONT_KEY_GOTHIC_28_BOLD, 0, 116, w, 34);
+  graphics_context_set_text_color(ctx, minutes > 0 ? COLOR_VALUE : COLOR_DISABLED);
+  DRAW_FITTED(ctx, value_buf, LARGE_FONTS, x, w, h * 56 / 100);
 
-  graphics_context_set_text_color(ctx, GColorLightGray);
-  draw_centered(ctx, s_num_bits == 0 ? "UP adds 1\nDOWN adds 0"
-                                     : "BACK erases\nhold SELECT clears",
-                FONT_KEY_GOTHIC_18, 0, h - 52, w, 46);
+  graphics_context_set_text_color(ctx, COLOR_MUTED);
+  const char *hint = s_num_bits == 0 ? "UP adds 1\nDOWN adds 0" : "BACK erases\nhold SELECT clears";
+  graphics_draw_text(ctx, hint,
+                     fonts_get_system_font(PBL_IF_ROUND_ELSE(FONT_KEY_GOTHIC_14, FONT_KEY_GOTHIC_18)),
+                     GRect(x, h * PBL_IF_ROUND_ELSE(70, 72) / 100, w, h / 4),
+                     GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 }
 
-static void draw_countdown(GContext *ctx, int w, int h) {
+static void draw_countdown(GContext *ctx, int x, int w, int h) {
   int left = seconds_left();
   static char buf[16];
   int hours = left / 3600, mins = (left / 60) % 60, secs = left % 60;
@@ -208,44 +275,54 @@ static void draw_countdown(GContext *ctx, int w, int h) {
   static const char *labels[] = {
     [STATE_RUNNING] = "RUNNING", [STATE_PAUSED] = "PAUSED", [STATE_DONE] = "TIME'S UP!",
   };
-  GColor label_color = s_state == STATE_DONE   ? GColorRed
-                     : s_state == STATE_PAUSED ? GColorChromeYellow
-                                               : GColorGreen;
+  GColor label_color = s_state == STATE_DONE   ? COLOR_FALLBACK(GColorRed, GColorWhite)
+                     : s_state == STATE_PAUSED ? COLOR_FALLBACK(GColorChromeYellow, GColorWhite)
+                                               : COLOR_FALLBACK(GColorGreen, GColorWhite);
   graphics_context_set_text_color(ctx, label_color);
-  draw_centered(ctx, labels[s_state], FONT_KEY_GOTHIC_24_BOLD, 0, 44, w, 30);
+  DRAW_FITTED(ctx, labels[s_state], LABEL_FONTS, x, w, h * 25 / 100);
 
   graphics_context_set_text_color(ctx, GColorWhite);
-  draw_centered(ctx, buf, hours > 0 ? FONT_KEY_LECO_28_LIGHT_NUMBERS : FONT_KEY_LECO_42_NUMBERS,
-                0, hours > 0 ? 92 : 84, w, 50);
+  DRAW_FITTED(ctx, buf, CLOCK_FONTS, x, w, h * 45 / 100);
 
   // Progress bar (fraction remaining).
-  const int bar_x = 12, bar_w = w - 24, bar_y = 148, bar_h = 8;
-  graphics_context_set_fill_color(ctx, GColorDarkGray);
-  graphics_fill_rect(ctx, GRect(bar_x, bar_y, bar_w, bar_h), 4, GCornersAll);
+  const GRect track = GRect(x + 12, h * 64 / 100, w - 24, 8);
+  graphics_context_set_fill_color(ctx, COLOR_TRACK);
+  graphics_fill_rect(ctx, track, 4, GCornersAll);
+#if !defined(PBL_COLOR)
+  graphics_context_set_stroke_color(ctx, GColorWhite);
+  graphics_draw_round_rect(ctx, track, 4);
+#endif
   if (s_total > 0 && left > 0) {
     graphics_context_set_fill_color(ctx, label_color);
-    graphics_fill_rect(ctx, GRect(bar_x, bar_y, bar_w * left / s_total, bar_h), 4, GCornersAll);
+    graphics_fill_rect(ctx, GRect(track.origin.x, track.origin.y, track.size.w * left / s_total,
+                                  track.size.h), 4, GCornersAll);
   }
 
   static char total_buf[32];
   snprintf(total_buf, sizeof(total_buf), "of %d min (%s)", s_total / 60, s_bits);
-  graphics_context_set_text_color(ctx, GColorLightGray);
-  draw_centered(ctx, total_buf, FONT_KEY_GOTHIC_18, 0, 162, w, 22);
+  graphics_context_set_text_color(ctx, COLOR_MUTED);
+  DRAW_FITTED(ctx, total_buf, SMALL_FONTS, x, w, h * 75 / 100);
 }
 
 static void canvas_update(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
-  const int content_w = bounds.size.w - ACTION_BAR_WIDTH;
+  const int h = bounds.size.h;
+  // Content column, clear of the button hints.
+#if defined(PBL_ROUND)
+  const int x = bounds.size.w / 8, w = bounds.size.w * 68 / 100;
+#else
+  const int x = 0, w = bounds.size.w - ACTION_BAR_WIDTH;
+#endif
 
   graphics_context_set_fill_color(ctx, GColorBlack);
   graphics_fill_rect(ctx, bounds, 0, GCornerNone);
 
   if (s_state == STATE_ENTRY) {
-    draw_entry(ctx, content_w, bounds.size.h);
+    draw_entry(ctx, x, w, h, bounds.size.w);
   } else {
-    draw_countdown(ctx, content_w, bounds.size.h);
+    draw_countdown(ctx, x, w, h);
   }
-  draw_action_bar(ctx, GRect(content_w, 0, ACTION_BAR_WIDTH, bounds.size.h));
+  draw_button_hints(ctx, bounds);
 }
 
 // ----------------------------------------------------------------- clicks
